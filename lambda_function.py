@@ -7,6 +7,14 @@ BLOCKED_TILES = {"wall", "c8"}
 BLOCKED_TILES_NO_SPIKES = {"wall"}
 DIRECTIONS = [(-1, 0, "up"), (1, 0, "down"), (0, -1, "left"), (0, 1, "right")]
 
+# Point values for cost-benefit analysis
+REWARD_VALUES = {
+    "c7": 250, "c1": 400, "c2": 600, "c3": 550, "c4": 800,
+    "c5": 250, "c6": 250, "c17": 50, "c40": 50, "c41": 50,
+    "c30": 1000, "c31": 1000, "treasure": 1000
+}
+SPIKE_COST = 250  # Cost of losing 1 life
+
 def _extract_params(event):
     if 'parameters' in event and isinstance(event['parameters'], list):
         params = {}
@@ -66,11 +74,85 @@ def _bfs(game_map, rows, cols, start, goal, extra_blocked=None, allow_cells=None
                     queue.append((nr, nc, path + [move]))
     return None
 
-def _bfs_spike_aware(game_map, rows, cols, start, goal, extra_blocked=None, allow_cells=None):
+def _get_reachable_rewards(game_map, rows, cols, start, extra_blocked=None, allow_spikes=False):
+    """Find all reachable reward cells from a position."""
+    blocked = extra_blocked or set()
+    block_set = BLOCKED_TILES_NO_SPIKES if allow_spikes else BLOCKED_TILES
+    queue = deque([(start[0], start[1])])
+    visited = {(start[0], start[1])}
+    rewards = []
+    while queue:
+        r, c = queue.popleft()
+        cell = game_map[r][c]
+        if cell in REWARD_VALUES and (r, c) != start:
+            rewards.append((r, c, cell))
+        for dr, dc, _ in DIRECTIONS:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < rows and 0 <= nc < cols and (nr, nc) not in visited:
+                ncell = game_map[nr][nc]
+                if ncell not in block_set and (nr, nc) not in blocked:
+                    visited.add((nr, nc))
+                    queue.append((nr, nc))
+    return rewards
+
+def _calculate_spike_value(game_map, rows, cols, spike_pos, current_pos, extra_blocked=None):
+    """Calculate net value of walking through a spike.
+    Returns the value of rewards ONLY accessible through this spike minus the spike cost."""
+    blocked = extra_blocked or set()
+    
+    # Find rewards reachable WITHOUT the spike (current situation)
+    rewards_without = set()
+    for r, c, cell in _get_reachable_rewards(game_map, rows, cols, current_pos, extra_blocked=blocked, allow_spikes=False):
+        rewards_without.add((r, c))
+    
+    # Find rewards reachable WITH the spike allowed
+    allowed_spike = {spike_pos}
+    rewards_with = set()
+    # Temporarily allow this one spike
+    for r, c, cell in _get_reachable_rewards(game_map, rows, cols, current_pos, extra_blocked=blocked, allow_spikes=False):
+        rewards_with.add((r, c))
+    # Also check from the spike position itself (what's beyond it)
+    for r, c, cell in _get_reachable_rewards(game_map, rows, cols, spike_pos, extra_blocked=blocked, allow_spikes=False):
+        rewards_with.add((r, c))
+    
+    # Rewards ONLY accessible through the spike
+    new_rewards = rewards_with - rewards_without
+    
+    # Calculate total value of new rewards
+    total_value = 0
+    for r, c in new_rewards:
+        cell = game_map[r][c]
+        total_value += REWARD_VALUES.get(cell, 0)
+    
+    # Net value = rewards gained - cost of spike
+    return total_value - SPIKE_COST
+
+def _bfs_spike_strategic(game_map, rows, cols, start, goal, extra_blocked=None, allow_cells=None):
+    """Try path avoiding spikes. If no path, check if spike is worth the cost."""
+    # First try: avoid all spikes
     path = _bfs(game_map, rows, cols, start, goal, extra_blocked=extra_blocked, allow_cells=allow_cells, allow_spikes=False)
     if path is not None:
         return path
-    return _bfs(game_map, rows, cols, start, goal, extra_blocked=extra_blocked, allow_cells=allow_cells, allow_spikes=True)
+    
+    # No spike-free path exists. Check if going through spike is worth it.
+    # Find which spikes are between us and the goal
+    # For simplicity: if the goal itself is valuable enough, allow spikes
+    goal_cell = game_map[goal[0]][goal[1]]
+    goal_value = REWARD_VALUES.get(goal_cell, 0)
+    
+    # Also estimate rewards beyond the goal
+    beyond_value = 0
+    for r, c, cell in _get_reachable_rewards(game_map, rows, cols, goal, extra_blocked=extra_blocked, allow_spikes=False):
+        beyond_value += REWARD_VALUES.get(cell, 0)
+    
+    total_accessible_value = goal_value + beyond_value
+    
+    # Allow spike if the total value justifies it (rewards > spike cost)
+    if total_accessible_value > SPIKE_COST:
+        return _bfs(game_map, rows, cols, start, goal, extra_blocked=extra_blocked, allow_cells=allow_cells, allow_spikes=True)
+    
+    # Not worth it — skip this target
+    return None
 
 def _find_start_exit(game_map, rows, cols, start_pos):
     r, c = start_pos
@@ -146,7 +228,8 @@ def _pathfind(game_map, start_pos):
                 if target == (r, c):
                     board[r][c] = 'normal'
                     continue
-                tp = _bfs_spike_aware(board, rows, cols, (r, c), target, extra_blocked=blocked, allow_cells=allowed_spikes)
+                # Use strategic spike decision
+                tp = _bfs_spike_strategic(board, rows, cols, (r, c), target, extra_blocked=blocked, allow_cells=allowed_spikes)
                 if tp and len(tp) < best_dist:
                     best_dist = len(tp)
                     best_path = tp
@@ -159,35 +242,48 @@ def _pathfind(game_map, start_pos):
                 break
         return path, r, c
 
+    # PHASE 1: Sweep accessible targets (both doors blocked)
     path_segment, r, c = sweep(board, r, c, blocked_doors)
     full_path.extend(path_segment)
 
+    # PHASE 2: Get RED key (keys/doors are always worth the spike cost)
     if red_key_pos and red_door_pos:
         if board[red_key_pos[0]][red_key_pos[1]] != 'normal':
-            path_to_key = _bfs_spike_aware(board, rows, cols, (r, c), red_key_pos, extra_blocked=blocked_doors, allow_cells=allowed_spikes)
+            # Keys are critical — always allow spikes for keys
+            path_to_key = _bfs(board, rows, cols, (r, c), red_key_pos, extra_blocked=blocked_doors, allow_cells=allowed_spikes, allow_spikes=False)
+            if not path_to_key:
+                path_to_key = _bfs(board, rows, cols, (r, c), red_key_pos, extra_blocked=blocked_doors, allow_cells=allowed_spikes, allow_spikes=True)
             if path_to_key:
                 full_path.extend(path_to_key)
                 r, c = red_key_pos
                 board[r][c] = 'normal'
         blocked_doors.discard(red_door_pos)
 
+    # PHASE 3: Get GREEN key
     if green_key_pos and green_door_pos:
         if board[green_key_pos[0]][green_key_pos[1]] != 'normal':
-            path_to_key = _bfs_spike_aware(board, rows, cols, (r, c), green_key_pos, extra_blocked=blocked_doors, allow_cells=allowed_spikes)
+            path_to_key = _bfs(board, rows, cols, (r, c), green_key_pos, extra_blocked=blocked_doors, allow_cells=allowed_spikes, allow_spikes=False)
+            if not path_to_key:
+                path_to_key = _bfs(board, rows, cols, (r, c), green_key_pos, extra_blocked=blocked_doors, allow_cells=allowed_spikes, allow_spikes=True)
             if path_to_key:
                 full_path.extend(path_to_key)
                 r, c = green_key_pos
                 board[r][c] = 'normal'
         blocked_doors.discard(green_door_pos)
 
+    # PHASE 4: Sweep ALL remaining targets (both doors now open)
     path_segment, r, c = sweep(board, r, c, blocked_doors)
     full_path.extend(path_segment)
 
-    path_to_treasure = _bfs_spike_aware(board, rows, cols, (r, c), treasure, extra_blocked=blocked_doors, allow_cells=allowed_spikes)
+    # PHASE 5: Go to treasure (always worth allowing spikes — treasure = 1000 pts)
+    path_to_treasure = _bfs(board, rows, cols, (r, c), treasure, extra_blocked=blocked_doors, allow_cells=allowed_spikes, allow_spikes=False)
+    if not path_to_treasure:
+        path_to_treasure = _bfs(board, rows, cols, (r, c), treasure, extra_blocked=blocked_doors, allow_cells=allowed_spikes, allow_spikes=True)
     if path_to_treasure:
         full_path.extend(path_to_treasure)
         return full_path
 
+    # Final fallback
     all_spikes = set()
     for row in range(rows):
         for col in range(cols):
@@ -244,21 +340,7 @@ def lambda_handler(event, context):
             start_pos = (0, 0)
 
         path = _pathfind(game_map, start_pos)
-
-        # PATH VALIDATION - prevent walking into walls
-        validated_path = []
-        cr, cc = start_pos
-        move_map = {"up": (-1,0), "down": (1,0), "left": (0,-1), "right": (0,1)}
-        for move in path:
-            dr, dc = move_map.get(move, (0,0))
-            nr, nc = cr + dr, cc + dc
-            if 0 <= nr < rows and 0 <= nc < cols and game_map[nr][nc] != "wall":
-                validated_path.append(move)
-                cr, cc = nr, nc
-            else:
-                break
-
-        return {"result": json.dumps(validated_path), "success": True, "steps": len(validated_path)}
+        return {"result": json.dumps(path), "success": True, "steps": len(path)}
 
     else:
         return {"result": "0", "success": False, "error": f"Unknown action: {action}"}
