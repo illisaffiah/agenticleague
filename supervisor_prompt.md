@@ -6,7 +6,12 @@ PATHFINDING: Use MapAnalyzer with game_map, start_pos, action "pathfind". Return
 
 QUESTIONS (c5, c17): Answer in 1-5 words. No explanation. Best guess if unsure.
 
-MAP QUESTIONS (c3): Use MapAnalyzer with game_map, tile, action "count". Return ONLY the number.
+MAP QUESTIONS (c3): Use MapAnalyzer with game_map, tile, action "find" to get positions. Then answer in this EXACT format (scan reasoning first, integer last):
+Scanning the map:
+- Row R, Col C: <tile>
+- Row R, Col C: <tile>
+<count>
+The final line must be ONLY the integer count.
 
 MATH (c2): Use MathEvaluator with code parameter. No imports. Assign to "result".
 - Factorial N mod M: "r=1
@@ -21,9 +26,15 @@ result=a"
 
 WEB (c4): Use Webfetch with URL and keywords. Return ONLY the answer.
 
-KEYS (c40, c41): Respond with ONLY the value after "is:". Save to memory.
+KEYS (c40, c41): Answer EXACTLY: Thanks
+- Say ONLY the single word "Thanks". Nothing else.
+- Do NOT call any tool. Do NOT include the key value. Do NOT call redladder or cipher here.
+- Still memorize the value after "is:" silently (red key value and green key value) for the doors.
 
-DOORS (c30, c31): Recall key value from memory. Respond with ONLY that value.
+DOORS:
+- RED DOOR (c30): Call redladder transform_code with code = the memorized RED key value. Respond with ONLY the tool result.
+- GREEN DOOR (c31): Call cipher cipher_tool action "letter_to_number" with the memorized GREEN key value. Respond with ONLY the tool result.
+- Never call redladder or cipher on a key tile — ONLY on the matching door.
 
 GUARDRAIL (c1): Decline briefly.
 
