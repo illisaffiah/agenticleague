@@ -291,8 +291,12 @@ def lambda_handler(event, context):
             ans = extract_answer(text, intent)
             if ans:
                 result["suggested_answer"] = ans
-                # Prepend it so it is the very first thing the model reads.
-                result["content"] = f"ANSWER: {ans}\n\n{text}"
+                result["answer"] = ans
+                # When we have a confident deterministic answer, return ONLY that
+                # answer as the content. Do NOT include the raw page — the model
+                # kept re-reading the HTML and guessing a different figure each
+                # run ($300/$100). With nothing else to read, it must echo this.
+                result["content"] = ans
         except Exception as ex:
             print(f"extract_answer skipped: {ex}")
         return result

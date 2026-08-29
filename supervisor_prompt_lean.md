@@ -21,8 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): Call the WebSearch fetch tool ONCE with three plain-string params: url=<the url>, keywords=<question key nouns comma-joined>, question=<full question text>.
-The tool result begins with a line "ANSWER: X" and includes a "suggested_answer" field. Your ENTIRE reply for c4 MUST be exactly that X (the suggested_answer value), copied verbatim — nothing else. Do NOT compute, infer, or output any number or word that is not that exact value. Never answer a figure that does not appear in the tool's ANSWER line. If (and only if) there is no ANSWER line, read the content and copy the exact word/figure from the sentence with the asked metric. Output only that value.
+c4 ("According to <url>"): Call the WebSearch fetch tool ONCE with url=<the url>, keywords=<question key nouns comma-joined>, question=<full question text>. The tool returns a short "content" (and an "answer"/"suggested_answer" field). Output the tool's content EXACTLY as-is (or the "answer" field if present) — it already IS the answer. Do NOT reinterpret, recompute, or substitute any other number/word. Output only that value.
 
 c5: 1-5 words.
 
