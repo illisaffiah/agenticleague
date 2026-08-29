@@ -280,29 +280,22 @@ def lambda_handler(event, context):
 
     try:
         text = fetch_url(url, keywords=keywords)
+        # RETURN THE REAL PAGE CONTENT (like the original 17k-era version that
+        # reliably won c4). The model reads the grounded sentence and extracts
+        # the answer. Returning a bare pre-extracted number made the model
+        # distrust the terse result and fall back to its own memory ($100/$300).
         result = {"success": True, "content": text}
-        # Deterministic answer extraction (rule-based). If we can confidently
-        # pull the exact figure/term, surface it so the model echoes it.
+        # Additionally surface a deterministic 'answer' hint as a SEPARATE field
+        # (not replacing content) — belt-and-suspenders, no downside.
         try:
-            # Use question if present; else fall back to keywords as the intent
-            # hint. extract_answer also inspects the page text, so it can still
-            # fire when the gateway forwards neither.
             intent = question or (", ".join(keywords) if keywords else "")
             ans = extract_answer(text, intent)
             if ans:
-                result["suggested_answer"] = ans
                 result["answer"] = ans
-                result["final_answer"] = ans
-                # Return ONLY the answer as content, framed as the authoritative
-                # verbatim answer. The model was ignoring the tool result and
-                # answering from its own training memory (e.g. "$100"), so the
-                # content is phrased to leave no room to substitute other knowledge.
-                result["content"] = (
-                    f"VERIFIED ANSWER FROM PAGE: {ans}\n"
-                    f"Reply with exactly: {ans}\n"
-                    f"Do not use any other value; the page states {ans}."
-                )
-                result["instruction"] = f"Output exactly: {ans}"
+                result["suggested_answer"] = ans
+                # Prepend a one-line hint but KEEP the full grounding text after it,
+                # so the model has both the answer AND the sentence proving it.
+                result["content"] = f"ANSWER: {ans}\n\n{text}"
         except Exception as ex:
             print(f"extract_answer skipped: {ex}")
         return result

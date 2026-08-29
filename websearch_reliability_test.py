@@ -16,7 +16,8 @@ def run(label, event, page, expect_answer):
     # meaningful checks: the 'answer' field is correct AND content carries it
     ans = r.get('answer')
     content = r.get('content') or ''
-    ok = (ans == expect_answer) and (expect_answer in content)
+    # content now = "ANSWER: X\n\n<grounding page text>" — check answer field + hint present
+    ok = (ans == expect_answer) and content.startswith(f"ANSWER: {expect_answer}")
     print(f"[{'OK' if ok else 'FAIL'}] {label}")
     if not ok:
         print(f"      got answer={ans!r} content={content!r}  expected={expect_answer!r}")
