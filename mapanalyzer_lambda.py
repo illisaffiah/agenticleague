@@ -54,21 +54,37 @@ def _extract_params(event):
 
 
 def _parse_start(pos):
+    """Parse a start position from any format into (row_index, col_index), 0-based.
+    Handles: 'A1' (col letter + 1-based row), [row,col] list/tuple,
+    and numeric strings like '[1, 0]', '1,0', '(2,3)', 'row0col0'."""
     try:
+        # List/tuple form
         if isinstance(pos, (list, tuple)):
+            if len(pos) == 1:
+                return _parse_start(pos[0])
             if len(pos) >= 2:
                 a = re.sub(r'[^A-Za-z0-9]', '', str(pos[0]))
                 b = re.sub(r'[^A-Za-z0-9]', '', str(pos[1]))
-                if a.isalpha():
+                if a.isalpha():                       # ['A','1'] -> letter=col, num=row
                     return (int(b) - 1, ord(a.upper()) - ord('A'))
-                return (int(a), int(b))
-        s = re.sub(r'[^A-Za-z0-9]', '', str(pos))
-        m = re.match(r'([A-Za-z])(\d+)', s)
-        if m:
-            return (int(m.group(2)) - 1, ord(m.group(1).upper()) - ord('A'))
+                return (int(a), int(b))               # [row, col]
+        s = str(pos)
+        # Chess-style "A1" / "B3": a letter followed by digits => col letter, 1-based row
+        mm = re.search(r'([A-Za-z])\s*[,;:]?\s*(\d+)', s)
+        # Only treat as chess-style if it's genuinely letter-then-number with no leading digits
+        chess = re.match(r'^\s*[\[\(]?\s*([A-Za-z])\s*(\d+)\s*[\]\)]?\s*$', s)
+        if chess:
+            return (int(chess.group(2)) - 1, ord(chess.group(1).upper()) - ord('A'))
+        # Otherwise pull ALL numbers from the ORIGINAL string (before stripping separators)
         nums = re.findall(r'\d+', s)
-        if len(nums) >= 2:
+        if len(nums) >= 2:                            # "[1, 0]" / "1,0" / "(2,3)" -> row,col
             return (int(nums[0]), int(nums[1]))
+        # dict-ish "row0col0"
+        rc = re.search(r'row\s*(\d+).*?col\s*(\d+)', s, re.IGNORECASE)
+        if rc:
+            return (int(rc.group(1)), int(rc.group(2)))
+        if len(nums) == 1:
+            return (int(nums[0]), 0)
     except (ValueError, TypeError, IndexError):
         pass
     return (0, 0)
@@ -278,6 +294,71 @@ def _pathfind(game_map, start_pos, life_value=250):
     return path or full_path
 
 
+def _replay_end(game_map, rows, cols, start, path):
+    """Replay path (stopping at walls/edges) and return the final valid position."""
+    mv = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
+    r, c = start
+    for m in path:
+        dr, dc = mv.get(m, (0, 0))
+        nr, nc = r + dr, c + dc
+        if 0 <= nr < rows and 0 <= nc < cols and game_map[nr][nc] != "wall":
+            r, c = nr, nc
+        else:
+            break
+    return (r, c)
+
+
+def _ensure_treasure(game_map, rows, cols, start, path):
+    """Guarantee the returned path ends on the treasure when it is reachable
+    at all. Doors and spikes are treated as passable for this safety route so
+    the avatar is never stranded and the +1000 treasure is never forfeited."""
+    treasure = None
+    for r in range(rows):
+        for c in range(cols):
+            if game_map[r][c] == 'treasure':
+                treasure = (r, c)
+                break
+        if treasure:
+            break
+    if treasure is None:
+        return path  # no treasure on this map; nothing to guarantee
+
+    end = _replay_end(game_map, rows, cols, start, path)
+    if end == treasure:
+        return path
+
+    # Append a route from wherever the plan left us to the treasure.
+    # Doors passable (open_cells = all doors), spikes crossable.
+    all_doors = {(r, c) for r in range(rows) for c in range(cols) if _is_door(game_map[r][c])}
+    tail, _ = _dijkstra(game_map, rows, cols, end, treasure,
+                        blocked=set(), open_cells=all_doors)
+    if tail:
+        return list(path) + tail
+    # Last resort: fresh route straight from start.
+    direct, _ = _dijkstra(game_map, rows, cols, start, treasure,
+                         blocked=set(), open_cells=all_doors)
+    return direct if direct is not None else path
+
+
+def _normalize_map(game_map):
+    """Coerce to a rectangular grid of strings. Pads short rows, replaces
+    non-string / empty cells with 'normal'. Never raises."""
+    if not isinstance(game_map, list) or not game_map:
+        return []
+    rows = []
+    for row in game_map:
+        if isinstance(row, list):
+            rows.append([str(x) if x is not None else 'normal' for x in row])
+        elif row is None:
+            rows.append([])
+        else:
+            rows.append([str(row)])
+    max_cols = max((len(r) for r in rows), default=0)
+    if max_cols == 0:
+        return []
+    return [r + ['normal'] * (max_cols - len(r)) for r in rows]
+
+
 def lambda_handler(event, context):
     params = _extract_params(event)
     game_map = (params.get('game_map') or params.get('map') or
@@ -287,9 +368,7 @@ def lambda_handler(event, context):
             game_map = json.loads(game_map)
         except (json.JSONDecodeError, TypeError):
             game_map = []
-    if game_map:
-        max_cols = max(len(row) for row in game_map)
-        game_map = [row + ['normal'] * (max_cols - len(row)) for row in game_map]
+    game_map = _normalize_map(game_map)
     action = params.get('action', 'count')
     tile = params.get('tile', '')
     if not game_map:
@@ -309,18 +388,30 @@ def lambda_handler(event, context):
         else:
             start_pos = _parse_start(raw_start)
         rows, cols = len(game_map), len(game_map[0])
-        if start_pos[0] >= rows or start_pos[1] >= cols:
+        if not (0 <= start_pos[0] < rows and 0 <= start_pos[1] < cols):
             start_pos = (0, 0)
-        path = _pathfind(game_map, start_pos)
-        # validation: never walk into a wall
+
+        # Primary planner, fully guarded: any error falls back to a safe route.
+        try:
+            path = _pathfind(game_map, start_pos)
+        except Exception as e:
+            print(f"PATHFIND ERROR (falling back): {type(e).__name__}: {e}")
+            path = []
+
+        # Guaranteed treasure fallback: if the plan does not end on the treasure,
+        # append/return a spike-and-door-allowed route to the treasure so we never
+        # strand the avatar or forfeit the +1000 (only skipped if truly unreachable).
+        path = _ensure_treasure(game_map, rows, cols, start_pos, path)
+
+        # Validation: never emit a move that walks into a wall or off-grid.
         validated = []
         cr, cc = start_pos
         mv = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
-        for m in path:
-            dr, dc = mv.get(m, (0, 0))
+        for mve in path:
+            dr, dc = mv.get(mve, (0, 0))
             nr, nc = cr + dr, cc + dc
             if 0 <= nr < rows and 0 <= nc < cols and game_map[nr][nc] != "wall":
-                validated.append(m)
+                validated.append(mve)
                 cr, cc = nr, nc
             else:
                 break
