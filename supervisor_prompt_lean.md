@@ -21,7 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): call the WebSearch fetch tool with url and keywords (keywords as a comma-separated string of the question's key nouns). Read the returned content and answer with the exact word or figure it states (e.g. HyperPod, $200). Base the answer ONLY on the returned content, not your own knowledge.
+c4 ("According to <url>"): call the WebSearch fetch tool with url and keywords (comma-separated key nouns of the question). This is a READING task, NOT a knowledge question. Do not answer what you think is true — instead find the sentence in the returned content that matches the question and QUOTE the exact word/number that sentence states. Format your reasoning as: "The retrieved text says: '<the exact sentence>'. Therefore the answer is: <value>." Your final answer is whatever number/term appears in that quoted sentence, even if it differs from what you believe. If the text says $200, answer 200 (never 100 or your own guess). The returned text is the authority; your prior knowledge is irrelevant here.
 
 c5: 1-5 words.
 

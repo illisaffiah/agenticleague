@@ -143,7 +143,13 @@ def lambda_handler(event, context):
 
     try:
         text = fetch_url(url, keywords=keywords)
-        return {"success": True, "content": text}
+        # Opinion-based / source-attribution framing (Zhou et al. EMNLP 2023,
+        # arXiv:2303.11315): presenting retrieved text as an explicit source
+        # statement improves context-faithfulness and reduces the model
+        # overriding it with parametric (memorized) knowledge.
+        framed = ("The source web page states the following. Answer ONLY from "
+                  "this text, quoting the exact number/term it gives:\n\n" + text)
+        return {"success": True, "content": framed}
     except urllib.error.HTTPError as e:
         return {"success": False, "error": f"HTTP error {e.code}: {e.reason}"}
     except urllib.error.URLError as e:
