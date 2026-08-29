@@ -32,7 +32,9 @@ class TextExtractor(HTMLParser):
 
 
 def find_relevant_chunks(parts, keywords, context=1, max_chunks=3):
-    """Return paragraphs matching the most keywords, with neighboring lines for context."""
+    """Return the paragraphs that best match the keywords, most-relevant FIRST,
+    with neighboring lines for context. Ordering by score (not document order)
+    puts the answer-bearing sentence at the top so the model reads it first."""
     if not keywords:
         return None
 
@@ -45,17 +47,18 @@ def find_relevant_chunks(parts, keywords, context=1, max_chunks=3):
         part_lower = part.lower()
         score = sum(1 for kw in lower_keywords if kw in part_lower)
         if score > 0:
-            scores.append((score, i))
+            # tie-break: prefer shorter, denser snippets (more likely the exact fact)
+            scores.append((score, -len(part), i))
 
     if not scores:
         return None
 
-    scores.sort(reverse=True)
-    top_indices = sorted(i for _, i in scores[:max_chunks])
+    scores.sort(reverse=True)  # highest keyword-match first, then shortest
+    top = scores[:max_chunks]
 
     result_lines = []
     seen = set()
-    for idx in top_indices:
+    for _, _, idx in top:               # keep RELEVANCE order (best snippet first)
         start = max(0, idx - context)
         end = min(len(parts), idx + context + 1)
         for j in range(start, end):
