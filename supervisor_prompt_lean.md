@@ -21,7 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): Call WebSearch fetch_webpage_content with url=<the url> and keywords as a plain comma string built from the KEY NOUNS of the question (NOT brackets), e.g. for "reduce training time by up to 40%" use keywords="training time,40%,reduce"; for "credits ... free" use keywords="credits,free,new customer,200". Then find the sentence in the returned content that contains the asked metric and answer with the EXACT word or figure it names — copy it verbatim, do NOT paraphrase or summarize. Answer the specific noun/number only (a product name like "HyperPod", or a figure like "$200"), never a description. If the first fetch's top snippet does not contain the exact figure, retry ONCE with more specific keywords. Output only that exact answer.
+c4 ("According to <url>"): Call WebSearch fetch_webpage_content with url=<the url>, keywords=<key nouns of the question as a plain comma string>, and question=<the full question text>. If the tool result has a "suggested_answer" field, output EXACTLY that value and nothing else. Otherwise read the content, find the sentence with the asked metric, and copy the EXACT word/figure verbatim (a product name like HyperPod, or a figure like $200) — never paraphrase. Output only the answer.
 
 c5: 1-5 words.
 
