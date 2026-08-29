@@ -21,11 +21,8 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): Call the WebSearch fetch tool with THREE string parameters, each a plain string (no brackets, no arrays):
-  url = the url from the question
-  keywords = key nouns of the question joined by commas (e.g. "training time,40%,reduce")
-  question = the full question text, verbatim
-Get all three right on the FIRST call. If the tool result contains a "suggested_answer" field, output EXACTLY that value and nothing else (do not call again). Otherwise read the returned content, find the sentence with the asked metric, and copy the EXACT word/figure verbatim (a product name like HyperPod, a figure like $200) — never paraphrase or pick an unrelated number. Output only the answer.
+c4 ("According to <url>"): Call the WebSearch fetch tool ONCE with three plain-string params: url=<the url>, keywords=<question key nouns comma-joined>, question=<full question text>.
+The tool result begins with a line "ANSWER: X" and includes a "suggested_answer" field. Your ENTIRE reply for c4 MUST be exactly that X (the suggested_answer value), copied verbatim — nothing else. Do NOT compute, infer, or output any number or word that is not that exact value. Never answer a figure that does not appear in the tool's ANSWER line. If (and only if) there is no ANSWER line, read the content and copy the exact word/figure from the sentence with the asked metric. Output only that value.
 
 c5: 1-5 words.
 
