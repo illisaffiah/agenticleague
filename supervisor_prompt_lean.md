@@ -21,7 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): immediately call the WebSearch fetch tool (NO text before the call) with url=<the url>, keywords=<question key nouns comma-joined as a plain comma string>, question=<full question text>. Get the params right the first time; do not call twice. Output the tool's "result" field EXACTLY, the same way you output the "result" of the math tool. The "result" IS the answer — copy it verbatim, never reinterpret it, never use your own knowledge.
+c4 ("According to <url>"): call the WebSearch fetch tool with url and keywords (keywords as a comma-separated string of the question's key nouns). Read the returned content and answer with the exact word or figure it states (e.g. HyperPod, $200). Base the answer ONLY on the returned content, not your own knowledge.
 
 c5: 1-5 words.
 
