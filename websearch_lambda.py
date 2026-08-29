@@ -181,15 +181,35 @@ def extract_answer(text, question):
         return None
     q = (question or "")
     ql = q.lower()
+    tl = text.lower()
     keyphrases = _question_keyphrases(q)
     sents = _sentences(text)
 
-    is_money = any(w in ql for w in ["credit", "how much", "how many", "$", "dollar", "cost", "price", "free"])
+    # Intent detection uses the QUESTION when present, but ALSO the page text,
+    # so extraction still fires if the gateway did not forward the question.
+    money_words = ["credit", "how much", "how many", "$", "dollar", "cost", "price", "free"]
+    is_money = any(w in ql for w in money_words) or ("credit" in tl and "$" in text)
+
     pct_in_q = _re.search(r'(\d+)\s*%', ql)
-    is_percent_feature = bool(pct_in_q) or any(w in ql for w in ["percent", "reduce", "faster", "accelerat"])
+    pct_in_text = _re.search(r'(\d+)\s*%', text)
+    is_percent_feature = (bool(pct_in_q)
+                          or any(w in ql for w in ["percent", "reduce", "faster", "accelerat"])
+                          or (bool(pct_in_text) and not is_money))
 
     # Rank sentences by relevance to the QUESTION (context anchoring).
     ranked = sorted(sents, key=lambda s: _score_sentence(s, keyphrases, q), reverse=True)
+
+    # STRONG STANDALONE PATTERN: "up to $X in ... credits" anywhere on the page.
+    # Fires even with an empty/weak question (gateway may not forward it).
+    if is_money:
+        def _n(x):
+            return float(_re.sub(r'[^\d.]', '', x) or 0)
+        # Prefer $ amounts explicitly tied to the word "credit(s)" (both orders),
+        # so an unrelated "up to $300 per month" pricing figure is ignored.
+        credit_amts = _re.findall(r'\$\s?([\d,]+)[^.$]{0,40}?credit', text, _re.I)
+        credit_amts += _re.findall(r'credit[^.$]{0,40}?\$\s?([\d,]+)', text, _re.I)
+        if credit_amts:
+            return "$" + max(credit_amts, key=_n).replace(" ", "")
 
     # 1) MONEY: take the $ figure from the MOST RELEVANT sentence that has one,
     #    preferring an "up to $X" amount. Do NOT use a global page maximum.
@@ -264,7 +284,11 @@ def lambda_handler(event, context):
         # Deterministic answer extraction (rule-based). If we can confidently
         # pull the exact figure/term, surface it so the model echoes it.
         try:
-            ans = extract_answer(text, question) if question else extract_answer(text, ",".join(keywords))
+            # Use question if present; else fall back to keywords as the intent
+            # hint. extract_answer also inspects the page text, so it can still
+            # fire when the gateway forwards neither.
+            intent = question or (", ".join(keywords) if keywords else "")
+            ans = extract_answer(text, intent)
             if ans:
                 result["suggested_answer"] = ans
                 # Prepend it so it is the very first thing the model reads.
