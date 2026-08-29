@@ -21,7 +21,11 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): Call WebSearch fetch_webpage_content with url=<the url>, keywords=<key nouns of the question as a plain comma string>, and question=<the full question text>. If the tool result has a "suggested_answer" field, output EXACTLY that value and nothing else. Otherwise read the content, find the sentence with the asked metric, and copy the EXACT word/figure verbatim (a product name like HyperPod, or a figure like $200) — never paraphrase. Output only the answer.
+c4 ("According to <url>"): Call the WebSearch fetch tool with THREE string parameters, each a plain string (no brackets, no arrays):
+  url = the url from the question
+  keywords = key nouns of the question joined by commas (e.g. "training time,40%,reduce")
+  question = the full question text, verbatim
+Get all three right on the FIRST call. If the tool result contains a "suggested_answer" field, output EXACTLY that value and nothing else (do not call again). Otherwise read the returned content, find the sentence with the asked metric, and copy the EXACT word/figure verbatim (a product name like HyperPod, a figure like $200) — never paraphrase or pick an unrelated number. Output only the answer.
 
 c5: 1-5 words.
 
