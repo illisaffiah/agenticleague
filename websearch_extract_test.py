@@ -20,6 +20,17 @@ CASES = [
     ("money with commas",
      "Enterprise customers may receive up to $1,000 in onboarding credits.",
      "how many dollars in credits?", "$1,000"),
+    # THE REAL $300 TRAP: page has a bigger unrelated figure; answer must be the
+    # credits figure ($200), NOT the global max ($300 EC2 example).
+    ("bedrock 200 not 300 trap",
+     "Amazon EC2 instances can cost up to $300 per month for large workloads. "
+     "New AWS customers can get started with up to $200 in free credits to explore AWS AI.",
+     "up to how many credits can a new AWS customer receive to try AWS AI for free?", "$200"),
+    # another distractor: pricing table with big numbers, credits stated separately
+    ("credits vs pricing distractor",
+     "Reserved instances are available for $500 upfront. "
+     "The AWS Free Tier gives new customers up to $200 in credits.",
+     "how many credits for new customers free?", "$200"),
 ]
 
 ok = True

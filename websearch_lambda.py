@@ -147,42 +147,86 @@ def _sentences(text):
     return [c.strip() for c in chunks if c.strip()]
 
 
+def _question_keyphrases(q):
+    """Content words from the question used to locate the answer-bearing sentence."""
+    ql = q.lower()
+    stop = {"what", "is", "the", "a", "an", "of", "to", "in", "on", "by", "up",
+            "how", "many", "much", "can", "according", "http", "https", "com",
+            "www", "aws", "amazon", "feature", "for", "with", "and", "or", "that",
+            "this", "new", "receive", "get", "try", "free", "you", "your", "does",
+            "do", "are", "which", "will", "would", "should", "credits", "credit"}
+    words = _re.findall(r'[a-z0-9%]+', ql)
+    return [w for w in words if w not in stop and len(w) > 2]
+
+
+def _score_sentence(sent, keyphrases, q):
+    s = sent.lower()
+    score = sum(1 for k in keyphrases if k in s)
+    # boost sentences that carry the natural answer phrasing
+    if "up to" in s:
+        score += 2
+    if any(w in q.lower() for w in ["credit", "free", "$", "dollar", "cost", "price", "how much", "how many"]):
+        if "credit" in s or "free tier" in s or "free" in s:
+            score += 2
+    return score
+
+
 def extract_answer(text, question):
     """
     Deterministically extract the most likely EXACT answer token from the page,
-    based on what the question asks. Returns a short string or None.
-    This moves the 'reading' out of the LLM (rule-based > prompting).
+    CONTEXT-ANCHORED to the question (not a global max). Returns a short string
+    or None. Moves the 'reading' out of the LLM (rule-based > prompting).
     """
     if not text:
         return None
-    q = (question or "").lower()
+    q = (question or "")
+    ql = q.lower()
+    keyphrases = _question_keyphrases(q)
+    sents = _sentences(text)
 
-    # 1) MONEY: question asks "how many credits / how much / $" -> return the largest $ figure
-    if any(w in q for w in ["credit", "how much", "how many", "$", "dollar", "cost", "price", "free"]):
-        amounts = _re.findall(r'\$\s?[\d,]+(?:\.\d+)?', text)
-        if amounts:
-            # normalize and pick the largest (e.g. "$200" over "$100")
-            def val(a):
-                return float(_re.sub(r'[^\d.]', '', a) or 0)
-            best = max(amounts, key=val)
-            return best.replace(" ", "")
+    is_money = any(w in ql for w in ["credit", "how much", "how many", "$", "dollar", "cost", "price", "free"])
+    pct_in_q = _re.search(r'(\d+)\s*%', ql)
+    is_percent_feature = bool(pct_in_q) or any(w in ql for w in ["percent", "reduce", "faster", "accelerat"])
 
-    # 2) PERCENT-LINKED FEATURE: question mentions a % (e.g. "reduce ... by up to 40%")
-    pct_in_q = _re.search(r'(\d+)\s*%', q)
-    if pct_in_q or "percent" in q or "reduce" in q or "faster" in q or "up to" in q:
+    # Rank sentences by relevance to the QUESTION (context anchoring).
+    ranked = sorted(sents, key=lambda s: _score_sentence(s, keyphrases, q), reverse=True)
+
+    # 1) MONEY: take the $ figure from the MOST RELEVANT sentence that has one,
+    #    preferring an "up to $X" amount. Do NOT use a global page maximum.
+    if is_money:
+        def _num(a):
+            return float(_re.sub(r'[^\d.]', '', a) or 0)
+        for sent in ranked:
+            if _score_sentence(sent, keyphrases, q) <= 0:
+                break  # no relevant sentence left; avoid grabbing unrelated $ figures
+            # Prefer the largest "up to $X" WITHIN this relevant sentence
+            # ("$100 ... up to $100 more, for up to $200" -> $200, the total).
+            uptos = _re.findall(r'up to\s+\$\s?([\d,]+(?:\.\d+)?)', sent, _re.I)
+            if uptos:
+                best = max(uptos, key=lambda x: _num("$" + x))
+                return "$" + best.replace(" ", "")
+            anys = _re.findall(r'\$\s?([\d,]+(?:\.\d+)?)', sent)
+            if anys:
+                # within a single relevant sentence, the total is the largest figure
+                best = max(anys, key=lambda x: _num("$" + x))
+                return "$" + best.replace(" ", "")
+
+    # 2) PERCENT-LINKED FEATURE: in the sentence carrying the asked %, return the
+    #    proper-noun product/feature.
+    if is_percent_feature:
         target_pct = pct_in_q.group(1) if pct_in_q else None
-        for sent in _sentences(text):
-            if target_pct and (target_pct + "%") not in sent and (target_pct + " %") not in sent:
-                # if the question named a specific %, focus on sentences containing it
-                if _re.search(r'\d+\s*%', sent) and target_pct not in sent:
-                    continue
-            if _re.search(r'\d+\s*%', sent) or (target_pct and target_pct in sent):
-                # find a proper-noun product/feature name in this sentence
-                caps = _re.findall(r'\b([A-Z][a-zA-Z]+(?:[A-Z][a-zA-Z]+)*)\b', sent)
-                for c in caps:
-                    if c not in _STOPWORDS and len(c) > 2:
-                        return c
-    # 3) Fallback: no deterministic extraction
+        cand_sents = []
+        if target_pct:
+            cand_sents = [s for s in sents if target_pct in s]
+        if not cand_sents:
+            cand_sents = [s for s in ranked if _re.search(r'\d+\s*%', s)]
+        for sent in cand_sents:
+            caps = _re.findall(r'\b([A-Z][a-zA-Z]+(?:[A-Z][a-zA-Z]+)*)\b', sent)
+            for c in caps:
+                if c not in _STOPWORDS and len(c) > 2:
+                    return c
+
+    # 3) No confident deterministic extraction -> let the model read the content.
     return None
 
 
