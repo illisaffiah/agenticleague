@@ -31,7 +31,7 @@ c18 ("Patient ID..., name..., Provider..., Insurance ID..."): Output ONLY this o
 {"patient_id":"","first_name":"","last_name":"","provider_name":"","insurance_id":""}
 filled from the text, name split first/last.
 
-"<Color> Key N is: V" -> your ENTIRE reply is the single word: Thanks (nothing else, no tool). Keep V in mind for the matching door: red value from "Red Key...", green value from "Green Key...".
+"<Color> Key N is: V" (a STATEMENT giving you a value) -> your ENTIRE reply is the single word: Thanks. Do NOT call any tool. Do NOT run cipher_tool or redladder. Do NOT output the value or transform it. This includes "Green Key 1 is: fghi" -> reply ONLY "Thanks" (never 6789). Silently remember V for the matching DOOR later.
 "What is red key N?" -> immediately call redladder transform_code with code=<the red key value>. NO text before or after the call. Reply is only the tool result.
 "What is green key N?" -> immediately call cipher cipher_tool action letter_to_number with the green key value. NO text before or after the call. Reply is only the tool result.
 
