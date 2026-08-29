@@ -21,7 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): Call WebSearch fetch_webpage_content ONCE with url=<the url> and keywords as a list of strings, e.g. keywords=["training","40%"]. Never call it twice. Output only the answer.
+c4 ("According to <url>"): Call WebSearch fetch_webpage_content EXACTLY ONCE. Pass url=<the url> and keywords as ONE plain comma-separated string (NOT a list/array), e.g. keywords="training,40%" or keywords="credits,free,new customer". Do not wrap keywords in brackets or quotes-inside-quotes. If the first result is imperfect, still answer from it — do NOT call the tool again. Output only the answer (e.g. HyperPod, $200).
 
 c5: 1-5 words.
 
