@@ -21,7 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): Call WebSearch fetch_webpage_content EXACTLY ONCE. Pass url=<the url> and keywords as ONE plain comma-separated string (NOT a list/array), e.g. keywords="training,40%" or keywords="credits,free,new customer". Do not wrap keywords in brackets or quotes-inside-quotes. If the first result is imperfect, still answer from it — do NOT call the tool again. Output only the answer (e.g. HyperPod, $200).
+c4 ("According to <url>"): Call WebSearch fetch_webpage_content. Pass url=<the url> and keywords as ONE plain comma-separated string (NOT a list/array), e.g. keywords="training,40%" or keywords="credits,free,trial". Do not wrap keywords in brackets. Read the returned content and answer the EXACT figure asked (e.g. HyperPod, $200). Accuracy first: if the first result does not clearly contain the answer, you MAY call it once more with different keywords; if it does, answer immediately without another call. Output only the answer.
 
 c5: 1-5 words.
 
