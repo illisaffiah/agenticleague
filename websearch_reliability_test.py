@@ -14,10 +14,8 @@ def run(label, event, page, expect_answer):
     w.fetch_url = lambda url, keywords=None, _p=page: _p  # stub network
     r = w.lambda_handler(event, None)
     # meaningful checks: the 'answer' field is correct AND content carries it
-    ans = r.get('answer')
-    content = r.get('content') or ''
-    # content now = "ANSWER: X\n\n<grounding page text>" — check answer field + hint present
-    ok = (ans == expect_answer) and content.startswith(f"ANSWER: {expect_answer}")
+    # New shape: answer is in the top-level "result" field (matches math tool)
+    ok = (r.get('result') == expect_answer) and (r.get('success') is True)
     print(f"[{'OK' if ok else 'FAIL'}] {label}")
     if not ok:
         print(f"      got answer={ans!r} content={content!r}  expected={expect_answer!r}")

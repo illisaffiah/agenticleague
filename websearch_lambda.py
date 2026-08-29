@@ -280,25 +280,24 @@ def lambda_handler(event, context):
 
     try:
         text = fetch_url(url, keywords=keywords)
-        # RETURN THE REAL PAGE CONTENT (like the original 17k-era version that
-        # reliably won c4). The model reads the grounded sentence and extracts
-        # the answer. Returning a bare pre-extracted number made the model
-        # distrust the terse result and fall back to its own memory ($100/$300).
-        result = {"success": True, "content": text}
-        # Additionally surface a deterministic 'answer' hint as a SEPARATE field
-        # (not replacing content) — belt-and-suspenders, no downside.
+        intent = question or (", ".join(keywords) if keywords else "")
+        ans = None
         try:
-            intent = question or (", ".join(keywords) if keywords else "")
             ans = extract_answer(text, intent)
-            if ans:
-                result["answer"] = ans
-                result["suggested_answer"] = ans
-                # Prepend a one-line hint but KEEP the full grounding text after it,
-                # so the model has both the answer AND the sentence proving it.
-                result["content"] = f"ANSWER: {ans}\n\n{text}"
         except Exception as ex:
             print(f"extract_answer skipped: {ex}")
-        return result
+
+        if ans:
+            # CRITICAL: mimic the EXACT return shape of the math/c18 tools that the
+            # supervisor obeys reliably — the answer goes in a top-level "result"
+            # field (str). c2/c18 always win because the model faithfully echoes
+            # "result". websearch previously used "content"/"answer", which the
+            # model treated as text-to-reinterpret and overrode from memory.
+            return {"result": ans, "success": True,
+                    "answer": ans, "suggested_answer": ans}
+        # No confident extraction: fall back to returning page content so the
+        # model can read it (rare; only when the page has no clear answer).
+        return {"result": text, "success": True, "content": text}
     except urllib.error.HTTPError as e:
         return {"success": False, "error": f"HTTP error {e.code}: {e.reason}"}
     except urllib.error.URLError as e:
