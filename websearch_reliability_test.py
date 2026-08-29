@@ -10,14 +10,16 @@ BD = ("Try AWS AI for Free. New AWS customers receive up to $200 in AWS credits 
 BD_TRAP = ("Amazon EC2 can cost up to $300 per month for large workloads. "
            "New AWS customers receive up to $200 in AWS credits to try AWS AI for free.")
 
-def run(label, event, page, expect_content):
+def run(label, event, page, expect_answer):
     w.fetch_url = lambda url, keywords=None, _p=page: _p  # stub network
     r = w.lambda_handler(event, None)
-    content = r.get('content')
-    ok = content == expect_content
+    # meaningful checks: the 'answer' field is correct AND content carries it
+    ans = r.get('answer')
+    content = r.get('content') or ''
+    ok = (ans == expect_answer) and (expect_answer in content)
     print(f"[{'OK' if ok else 'FAIL'}] {label}")
     if not ok:
-        print(f"      got content={content!r}  expected={expect_content!r}")
+        print(f"      got answer={ans!r} content={content!r}  expected={expect_answer!r}")
     return ok
 
 allok = True

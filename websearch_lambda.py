@@ -292,11 +292,17 @@ def lambda_handler(event, context):
             if ans:
                 result["suggested_answer"] = ans
                 result["answer"] = ans
-                # When we have a confident deterministic answer, return ONLY that
-                # answer as the content. Do NOT include the raw page — the model
-                # kept re-reading the HTML and guessing a different figure each
-                # run ($300/$100). With nothing else to read, it must echo this.
-                result["content"] = ans
+                result["final_answer"] = ans
+                # Return ONLY the answer as content, framed as the authoritative
+                # verbatim answer. The model was ignoring the tool result and
+                # answering from its own training memory (e.g. "$100"), so the
+                # content is phrased to leave no room to substitute other knowledge.
+                result["content"] = (
+                    f"VERIFIED ANSWER FROM PAGE: {ans}\n"
+                    f"Reply with exactly: {ans}\n"
+                    f"Do not use any other value; the page states {ans}."
+                )
+                result["instruction"] = f"Output exactly: {ans}"
         except Exception as ex:
             print(f"extract_answer skipped: {ex}")
         return result

@@ -21,7 +21,7 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): immediately call the WebSearch fetch tool (NO text before the call) with url=<the url>, keywords=<question key nouns comma-joined as a plain comma string>, question=<full question text>. Get the params right the first time; do not call twice. The tool returns a short "content" (and "answer"/"suggested_answer"). Output the tool's content EXACTLY as-is (or the "answer" field) — it already IS the answer. Do NOT reinterpret, recompute, or substitute any other number/word.
+c4 ("According to <url>"): immediately call the WebSearch fetch tool (NO text before the call) with url=<the url>, keywords=<question key nouns comma-joined as a plain comma string>, question=<full question text>. Get the params right the first time; do not call twice. The tool's "answer"/"final_answer" field (and its content) IS the answer. Output that value EXACTLY. CRITICAL: the tool result is the ONLY source of truth. NEVER answer from your own memory or prior knowledge about AWS — even if you "know" a number, use ONLY the tool's returned value. Do NOT substitute a value the tool did not return.
 
 c5: 1-5 words.
 
