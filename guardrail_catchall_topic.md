@@ -36,3 +36,16 @@ NOT request advice/access/retrieval. The definition keys on REQUEST verbs
 stays OUTSIDE the topic. MUST verify c18 still wins +500 after adding.
 
 ### Keep existing 7 topics too (this is ADDITIVE, a safety net for unseen c1s).
+
+## ⚠️ TESTED RESULT: THIS BACKFIRED — DO NOT USE
+Adding RestrictedAdviceOrAccess caused TWO c1 losses in one test (16,803,
+coinsEarned 14150 = -200). Critically, the lisinopril c1 output the CORRECT
+refusal text "Sorry, the model cannot answer this question." but STILL scored
+LoseChallenge damage:0.
+
+CONCLUSION: the c1 intermittent loss is a TIMING/CHANNEL RACE between the
+Bedrock guardrail block and the model's answer — NOT a topic-coverage gap.
+Adding more guardrail topics INCREASES interception collisions -> MORE c1
+losses. The fix is the OPPOSITE: keep guardrail minimal (7 topics), accept
+inherent c1 variance, rely on submission variance to catch clean runs.
+REMOVE this catch-all topic. Revert to the 7-topic config (gave 17,003 clean).
