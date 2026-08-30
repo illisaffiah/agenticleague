@@ -90,25 +90,48 @@ def _parse_start(pos):
     return (0, 0)
 
 
-# --- Spike-weighted shortest path (0-1 Dijkstra) ---
-# Cost: normal step = 1, stepping onto a spike = SPIKE_COST.
-# This guarantees FEWEST spikes crossed, shortest among ties.
+# --- Spike-weighted shortest path (state-augmented Dijkstra) ---
+# CONFIRMED game mechanic (F7 probe: 3 physical contacts -> exactly 1 damage
+# event): a spike tile is a ONE-TIME TOLL. The FIRST time the avatar enters a
+# given spike tile it costs 1 life; every SUBSEQUENT entry of that SAME tile is
+# FREE. So spike cost is path-dependent: it depends on which spikes have already
+# been triggered earlier on the route.
+#
+# We model this by augmenting the search state with the set of spikes already
+# triggered. Entering a spike:
+#   - already in `triggered`  -> step cost 1 (free highway, re-crossing)
+#   - not yet triggered       -> step cost SPIKE_COST (pay the toll once)
+# `already_triggered` seeds spikes paid for in PRIOR planner segments so later
+# trips reuse them for free. The number of DISTINCT NEW tolls paid on a route is
+# cost // SPIKE_COST (path length always << SPIKE_COST on a real board).
 SPIKE_COST = 100000
 
-def _dijkstra(game_map, rows, cols, start, goal, blocked, open_cells):
+def _dijkstra(game_map, rows, cols, start, goal, blocked, open_cells,
+              already_triggered=None):
     """
     blocked: set of cells treated as walls (e.g. locked doors).
     open_cells: set of cells force-walkable (e.g. an unlocked door, or start-trapped spikes).
-    Returns (path_moves, spikes_crossed) or (None, None).
+    already_triggered: set of spike (r,c) already paid for in earlier segments;
+        entering these is FREE.
+    Returns (path_moves, new_spikes_triggered_set) or (None, None).
+    The second value is the SET of spike tiles this route triggers for the FIRST
+    time (empty set if none). len(...) is the life cost of taking this route.
     """
-    dist = {start: 0}
-    pq = [(0, start[0], start[1], [])]
+    if already_triggered is None:
+        already_triggered = frozenset()
+    else:
+        already_triggered = frozenset(already_triggered)
+
+    start_state = (start[0], start[1], already_triggered)
+    dist = {start_state: 0}
+    # heap entries: (cost, r, c, triggered_frozenset, path)
+    pq = [(0, start[0], start[1], already_triggered, [])]
     while pq:
-        cost, r, c, path = heapq.heappop(pq)
+        cost, r, c, triggered, path = heapq.heappop(pq)
         if (r, c) == goal:
-            spikes = cost // SPIKE_COST
-            return path, spikes
-        if cost > dist.get((r, c), float('inf')):
+            new_spikes = set(triggered) - set(already_triggered)
+            return path, new_spikes
+        if cost > dist.get((r, c, triggered), float('inf')):
             continue
         for dr, dc, move in DIRECTIONS:
             nr, nc = r + dr, c + dc
@@ -123,11 +146,17 @@ def _dijkstra(game_map, rows, cols, start, goal, blocked, open_cells):
                     continue
                 if _is_door(cell):   # locked door acts as wall unless in open_cells/goal
                     continue
-            step = SPIKE_COST if cell in SPIKE_TILES else 1
+            ntrig = triggered
+            if cell in SPIKE_TILES and (nr, nc) not in triggered:
+                step = SPIKE_COST                       # first entry: pay the toll
+                ntrig = triggered | frozenset({(nr, nc)})
+            else:
+                step = 1                                # normal step OR free re-cross
             ncost = cost + step
-            if ncost < dist.get((nr, nc), float('inf')):
-                dist[(nr, nc)] = ncost
-                heapq.heappush(pq, (ncost, nr, nc, path + [move]))
+            nstate = (nr, nc, ntrig)
+            if ncost < dist.get(nstate, float('inf')):
+                dist[nstate] = ncost
+                heapq.heappush(pq, (ncost, nr, nc, ntrig, path + [move]))
     return None, None
 
 
@@ -180,6 +209,10 @@ def _pathfind(game_map, start_pos, life_value=250):
     key_pos_by_code = dict(keys)
     door_pos_by_code = dict(doors)
 
+    # Persistent set of spike tiles already triggered (paid for) so far on the
+    # actual route. Seeds every _dijkstra call: re-crossing a paid spike is free.
+    triggered_spikes = set()
+
     def value_of(cell):
         if cell in COIN_TILES:
             return 250
@@ -187,24 +220,30 @@ def _pathfind(game_map, start_pos, life_value=250):
             return 400  # conservative; challenges always worth >= a life -> always take
         return 0
 
-    def go_to(goal, force_take=False):
-        """Move to goal via fewest-spike path (locked doors block).
-        If spikes required and target value < life cost and not force_take, skip."""
+    def commit(path, new_spikes, dest):
+        """Apply a chosen route: record it, advance position, mark spikes paid."""
         nonlocal r, c
-        path, spikes = _dijkstra(board, rows, cols, (r, c), goal,
-                                 blocked=locked_doors - {goal}, open_cells=open_cells)
+        full_path.extend(path)
+        r, c = dest
+        triggered_spikes.update(new_spikes)
+
+    def go_to(goal, force_take=False):
+        """Move to goal via fewest-NEW-spike path (locked doors block).
+        Only NEW (un-paid) spikes count toward life cost; already-paid spikes are
+        free highways. Skip if the fresh toll exceeds the target's value."""
+        path, new_spikes = _dijkstra(board, rows, cols, (r, c), goal,
+                                     blocked=locked_doors - {goal}, open_cells=open_cells,
+                                     already_triggered=triggered_spikes)
         if path is None:
             return False
-        if spikes > 0 and not force_take:
-            if value_of(board[goal[0]][goal[1]]) < spikes * life_value:
+        if new_spikes and not force_take:
+            if value_of(board[goal[0]][goal[1]]) < len(new_spikes) * life_value:
                 return False
-        full_path.extend(path)
-        r, c = goal
+        commit(path, new_spikes, goal)
         return True
 
     def sweep():
-        """Collect all currently-reachable coins/challenges, fewest-spikes then nearest."""
-        nonlocal r, c
+        """Collect all currently-reachable coins/challenges, fewest-NEW-spikes then nearest."""
         for _ in range(400):
             best = None
             for row in range(rows):
@@ -214,56 +253,54 @@ def _pathfind(game_map, start_pos, life_value=250):
                         continue
                     if (row, col) == (r, c):
                         continue
-                    path, spikes = _dijkstra(board, rows, cols, (r, c), (row, col),
-                                             blocked=locked_doors, open_cells=open_cells)
+                    path, new_spikes = _dijkstra(board, rows, cols, (r, c), (row, col),
+                                                 blocked=locked_doors, open_cells=open_cells,
+                                                 already_triggered=triggered_spikes)
                     if path is None:
                         continue
-                    if spikes > 0 and value_of(cell) < spikes * life_value:
+                    if new_spikes and value_of(cell) < len(new_spikes) * life_value:
                         continue
-                    key = (spikes, len(path))
+                    key = (len(new_spikes), len(path))
                     if best is None or key < best[0]:
-                        best = (key, path, (row, col))
+                        best = (key, path, new_spikes, (row, col))
             if not best:
                 break
-            _, path, tgt = best
-            full_path.extend(path)
-            r, c = tgt
-            board[r][c] = 'normal'
+            _, path, new_spikes, tgt = best
+            commit(path, new_spikes, tgt)
+            board[tgt[0]][tgt[1]] = 'normal'
 
     def collect_keys():
         """Pick up every currently-reachable key (keys gate +1000 doors -> force)."""
-        nonlocal r, c
         progressed = True
         while progressed:
             progressed = False
             for kcode, kpos in list(key_pos_by_code.items()):
                 if board[kpos[0]][kpos[1]] == 'normal':
                     continue  # already taken
-                path, spikes = _dijkstra(board, rows, cols, (r, c), kpos,
-                                         blocked=locked_doors, open_cells=open_cells)
+                path, new_spikes = _dijkstra(board, rows, cols, (r, c), kpos,
+                                             blocked=locked_doors, open_cells=open_cells,
+                                             already_triggered=triggered_spikes)
                 if path is None:
                     continue
-                full_path.extend(path)
-                r, c = kpos
-                board[r][c] = 'normal'
+                commit(path, new_spikes, kpos)
+                board[kpos[0]][kpos[1]] = 'normal'
                 keys_held.add(_door_for_key(kcode))
                 progressed = True
 
     def open_doors():
         """Walk onto any door whose key we hold (unlocks + passes through). Force-take."""
-        nonlocal r, c
         progressed = False
         for dcode in list(keys_held):
             dpos = door_pos_by_code.get(dcode)
             if dpos is None or dpos not in locked_doors:
                 continue
-            path, spikes = _dijkstra(board, rows, cols, (r, c), dpos,
-                                     blocked=locked_doors - {dpos}, open_cells=open_cells)
+            path, new_spikes = _dijkstra(board, rows, cols, (r, c), dpos,
+                                         blocked=locked_doors - {dpos}, open_cells=open_cells,
+                                         already_triggered=triggered_spikes)
             if path is None:
                 continue
-            full_path.extend(path)
-            r, c = dpos
-            board[r][c] = 'normal'
+            commit(path, new_spikes, dpos)
+            board[dpos[0]][dpos[1]] = 'normal'
             locked_doors.discard(dpos)
             progressed = True
         return progressed
@@ -282,15 +319,17 @@ def _pathfind(game_map, start_pos, life_value=250):
             if not any(dp in locked_doors for dp in door_pos_by_code.values()):
                 break
 
-    # 4) go to treasure (must-take, force spikes if the only route)
-    path, spikes = _dijkstra(board, rows, cols, (r, c), treasure,
-                             blocked=set(), open_cells=open_cells)
+    # 4) go to treasure (must-take; already-paid spikes are free highways)
+    path, _new = _dijkstra(board, rows, cols, (r, c), treasure,
+                           blocked=set(), open_cells=open_cells,
+                           already_triggered=triggered_spikes)
     if path is not None:
         full_path.extend(path)
         return full_path
 
     # fallback: shouldn't happen, but never forfeit the treasure
-    path, _ = _dijkstra(board, rows, cols, start_pos, treasure, blocked=set(), open_cells=open_cells)
+    path, _ = _dijkstra(board, rows, cols, start_pos, treasure,
+                        blocked=set(), open_cells=open_cells)
     return path or full_path
 
 
