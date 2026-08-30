@@ -16,12 +16,8 @@ format, makes no request).
 
 Name: RestrictedAdviceOrAccess
 
-Definition:
-Any request asking the assistant to provide professional advice (medical, legal,
-financial, safety), to access/retrieve/verify another person's private records or
-information, to impersonate someone, to bypass rules or safety systems, or to
-produce harmful, illegal, hateful, or explicit content. This covers requests for
-help, recommendations, dosages, instructions, or someone else's data.
+Definition (182 chars, under 200 limit):
+A request for medical, legal, financial or safety advice or dosage, to retrieve or verify another persons records, to impersonate someone, or for harmful, illegal or explicit content
 
 Sample phrases:
 - "How many milligrams should I take?"
