@@ -358,16 +358,21 @@ def lambda_handler(event, context):
         tile = body.get('tile', '')
 
         # --- Analysis mode (c3): count / find a tile ---
+        # Return the FULLY-FORMATTED "Scanning the map" answer so the model just
+        # echoes it verbatim (no formatting step -> no bare-number failure).
         if action in ('count', 'find') or (tile and not body.get('strategy')):
-            if action == 'find':
-                pos = [[r, c] for r in range(rows) for c in range(cols)
-                       if game_map[r][c] == tile]
-                return {'statusCode': 200,
-                        'body': json.dumps({'result': json.dumps(pos), 'count': len(pos)})}
-            # default analysis = count
-            count = sum(1 for row in game_map for cell in row if cell == tile)
+            positions = [(r, c) for r in range(rows) for c in range(cols)
+                         if game_map[r][c] == tile]
+            lines = ["Scanning the map:"]
+            for (r, c) in positions:
+                lines.append(f"- Row {r}, Col {c}: {tile}")
+            lines.append(str(len(positions)))
+            formatted = "\n".join(lines)
             return {'statusCode': 200,
-                    'body': json.dumps({'result': str(count), 'count': count})}
+                    'body': json.dumps({'result': formatted,
+                                        'answer': formatted,
+                                        'count': len(positions),
+                                        'positions': [[r, c] for (r, c) in positions]})}
 
         # --- Path mode (default) ---
         map_config = body.get('map_config', {})
