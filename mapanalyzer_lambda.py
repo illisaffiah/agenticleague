@@ -227,18 +227,47 @@ def _pathfind(game_map, start_pos, life_value=250):
         r, c = dest
         triggered_spikes.update(new_spikes)
 
+    def pocket_value(new_spikes):
+        """Total reward reachable ONCE we pay for `new_spikes` (i.e. treating those
+        spikes as free-crossable highways from now on). This is the PCOP pocket
+        insight: a spike gates a POCKET, so crossing it once unlocks EVERYTHING
+        beyond it, not just the single next tile. Sum coins+challenges reachable
+        with the new spikes considered already-triggered."""
+        if not new_spikes:
+            return 0
+        seed = set(triggered_spikes) | set(new_spikes)
+        total = 0
+        for rr in range(rows):
+            for cc in range(cols):
+                cell = board[rr][cc]
+                if not (cell in COIN_TILES or _is_challenge(cell)):
+                    continue
+                p, ns = _dijkstra(board, rows, cols, (r, c), (rr, cc),
+                                  blocked=locked_doors, open_cells=open_cells,
+                                  already_triggered=seed)
+                # reachable using ONLY the spikes we're about to pay for (no extra new ones)
+                if p is not None and not (set(ns) - set(new_spikes)):
+                    total += value_of(cell)
+        return total
+
+    def worth_crossing(new_spikes):
+        """Cross the new spikes iff total reward they unlock exceeds their life cost.
+        1 spike = 1 life = life_value (250) lost lifeBonus."""
+        if not new_spikes:
+            return True
+        return pocket_value(new_spikes) >= len(new_spikes) * life_value
+
     def go_to(goal, force_take=False):
         """Move to goal via fewest-NEW-spike path (locked doors block).
         Only NEW (un-paid) spikes count toward life cost; already-paid spikes are
-        free highways. Skip if the fresh toll exceeds the target's value."""
+        free highways. Cross new spikes iff the POCKET they unlock is worth it."""
         path, new_spikes = _dijkstra(board, rows, cols, (r, c), goal,
                                      blocked=locked_doors - {goal}, open_cells=open_cells,
                                      already_triggered=triggered_spikes)
         if path is None:
             return False
-        if new_spikes and not force_take:
-            if value_of(board[goal[0]][goal[1]]) < len(new_spikes) * life_value:
-                return False
+        if new_spikes and not force_take and not worth_crossing(new_spikes):
+            return False
         commit(path, new_spikes, goal)
         return True
 
@@ -258,7 +287,9 @@ def _pathfind(game_map, start_pos, life_value=250):
                                                  already_triggered=triggered_spikes)
                     if path is None:
                         continue
-                    if new_spikes and value_of(cell) < len(new_spikes) * life_value:
+                    # Pocket-value: cross new spikes only if the whole pocket they
+                    # unlock is worth the life cost (not just this single tile).
+                    if new_spikes and not worth_crossing(new_spikes):
                         continue
                     key = (len(new_spikes), len(path))
                     if best is None or key < best[0]:
