@@ -21,10 +21,10 @@ for i in range(N):
  a,b=b,(a+b)%M
 result=a
 
-c4 ("According to <url>"): call the WebSearch fetch tool ONCE with url and keywords (comma-separated key nouns). READING task, NOT knowledge. The returned text is the authority (if it says $200, answer 200, never a guess like 100). Output ONLY two short lines, nothing else:
+c4 ("According to <url>"): call the WebSearch fetch tool ONCE with ONLY the url parameter (do NOT pass keywords — url alone is enough). READING task, NOT knowledge. The returned text is the authority (if it says $200, answer 200, never a guess like 100). Output ONLY two short lines, nothing else:
 "<the exact sentence from returned content that contains the answer>"
 <the value from that sentence>
-Do not retry the tool. Quote verbatim from returned content, not memory.
+Do NOT retry the tool. One call only. Quote verbatim from returned content, not memory.
 
 c5: 1-5 words.
 
