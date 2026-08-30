@@ -5,11 +5,11 @@ MATCH IN THIS ORDER; use the FIRST rule that fits. A structured challenge ALWAYS
 
 Path ("Find ... treasure"): call MapAnalyzer with game_map and start_pos. Output ONLY the path array as COMPACT JSON with NO spaces (e.g. ["up","up","left"] not ["up", "up", "left"]). Nothing else.
 
-c3 ("How many <tile> ..."): call MapAnalyzer find(tile), NO text before the call. Then output only:
+c3 ("How many <tile> ..."): call MapAnalyzer find(tile), NO text before the call. EXCEPTION TO TERSENESS: this challenge REQUIRES the full multi-line block below as the committed answer — the bare number ALONE is WRONG and will be rejected. Output EXACTLY this multi-line format:
 Scanning the map:
 - Row R, Col C: <tile>
 <count>
-(one line per position, last line only the integer)
+(one "- Row R, Col C: <tile>" line for EACH matched position from the tool result, then a final line with ONLY the integer count. NEVER reply with just the number.)
 
 c2 (math): MathEvaluator code, no imports, result=answer. Output only the number. ONE tool call only.
 factorial N%M: r=1
