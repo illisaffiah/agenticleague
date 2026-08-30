@@ -5,11 +5,11 @@ MATCH IN THIS ORDER; use the FIRST rule that fits. A structured challenge ALWAYS
 
 Path ("Find ... treasure"): call the Pathfinding tool with game_map and start_pos. Output only the array from the returned "path" field, nothing else.
 
-c3 ("How many <tile> ..."): call the Pathfinding tool with action=find and tile=<tile>, NO text before the call. Then output only:
+c3 ("How many <tile> ..."): call the Pathfinding tool with action=find and tile=<tile>, NO text before the call. The tool returns {"result":"[[r,c],...]","count":N}. You MUST then output this EXACT format (not just the number):
 Scanning the map:
 - Row R, Col C: <tile>
 <count>
-(one line per position, last line only the integer)
+(one "- Row R, Col C: <tile>" line for EACH position in result, then a final line with ONLY the integer count). Never reply with just the bare number.
 
 c2 (math): MathEvaluator code, no imports, result=answer. Output only the number.
 factorial N%M: r=1
