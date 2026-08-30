@@ -3,17 +3,26 @@ import re
 import heapq
 from collections import deque
 
-# --- Generic tile classification (NO hardcoded challenge allowlist) ---
-# A tile is a COIN if it matches c7. It is a CHALLENGE if it is a c<N> tile that
-# is not a coin, spike, key, or door. Keys/doors/spikes detected by pattern.
+# =====================================================================
+# MERGED "Pathfinding" Lambda (organizer default tool, edited in place).
+# Replaces the weak swift/get_coins BFS with the full mapanalyzer engine:
+#   - spike ONE-TIME-TOLL weighted pathfinding (state-augmented Dijkstra)
+#   - key/door gating (collect key before its door)
+#   - guaranteed treasure fallback + wall-safe move validation
+#   - find / count actions (for the c3 "how many <tile>" challenge)
+# Keeps Pathfinding's I/O contract:
+#   input:  body/event with game_map (+ strategy | action | tile | start_pos)
+#   output: {'statusCode':200, 'body': json.dumps({...})}
+# so the organizer tool schema stays valid and mapanalyzer can be removed.
+# =====================================================================
+
 COIN_TILES = {"c7"}
 SPIKE_TILES = {"c8"}
 NONWALK_BASE = {"wall"}
 DIRECTIONS = [(-1, 0, "up"), (1, 0, "down"), (0, -1, "left"), (0, 1, "right")]
+SPIKE_COST = 100000
 
-# Key/door codes. Keys c40/c41; doors c30/c31. Pair by trailing digit:
-#   red   key c40 <-> door c30
-#   green key c41 <-> door c31
+
 def _is_key(cell):
     return bool(re.fullmatch(r"c4\d", cell or ""))
 
@@ -21,7 +30,6 @@ def _is_door(cell):
     return bool(re.fullmatch(r"c3\d", cell or ""))
 
 def _door_for_key(cell):
-    # c40 -> c30, c41 -> c31 (swap the '4' tens digit for '3')
     return "c3" + cell[2:]
 
 def _is_challenge(cell):
@@ -33,53 +41,27 @@ def _is_challenge(cell):
         return False
     if _is_key(cell) or _is_door(cell):
         return False
-    return bool(re.fullmatch(r"c\d+", cell))  # any other c<N> is a challenge
-
-
-def _extract_params(event):
-    if 'parameters' in event and isinstance(event['parameters'], list):
-        params = {}
-        for p in event['parameters']:
-            name = p.get('name', '')
-            value = p.get('value', '')
-            try:
-                params[name] = json.loads(value) if isinstance(value, str) else value
-            except (json.JSONDecodeError, TypeError):
-                params[name] = value
-        return params
-    if 'body' in event:
-        body = json.loads(event['body']) if isinstance(event['body'], str) else event['body']
-        return body
-    return event
+    return bool(re.fullmatch(r"c\d+", cell))
 
 
 def _parse_start(pos):
-    """Parse a start position from any format into (row_index, col_index), 0-based.
-    Handles: 'A1' (col letter + 1-based row), [row,col] list/tuple,
-    and numeric strings like '[1, 0]', '1,0', '(2,3)', 'row0col0'."""
     try:
-        # List/tuple form
         if isinstance(pos, (list, tuple)):
             if len(pos) == 1:
                 return _parse_start(pos[0])
             if len(pos) >= 2:
                 a = re.sub(r'[^A-Za-z0-9]', '', str(pos[0]))
                 b = re.sub(r'[^A-Za-z0-9]', '', str(pos[1]))
-                if a.isalpha():                       # ['A','1'] -> letter=col, num=row
+                if a.isalpha():
                     return (int(b) - 1, ord(a.upper()) - ord('A'))
-                return (int(a), int(b))               # [row, col]
+                return (int(a), int(b))
         s = str(pos)
-        # Chess-style "A1" / "B3": a letter followed by digits => col letter, 1-based row
-        mm = re.search(r'([A-Za-z])\s*[,;:]?\s*(\d+)', s)
-        # Only treat as chess-style if it's genuinely letter-then-number with no leading digits
         chess = re.match(r'^\s*[\[\(]?\s*([A-Za-z])\s*(\d+)\s*[\]\)]?\s*$', s)
         if chess:
             return (int(chess.group(2)) - 1, ord(chess.group(1).upper()) - ord('A'))
-        # Otherwise pull ALL numbers from the ORIGINAL string (before stripping separators)
         nums = re.findall(r'\d+', s)
-        if len(nums) >= 2:                            # "[1, 0]" / "1,0" / "(2,3)" -> row,col
+        if len(nums) >= 2:
             return (int(nums[0]), int(nums[1]))
-        # dict-ish "row0col0"
         rc = re.search(r'row\s*(\d+).*?col\s*(\d+)', s, re.IGNORECASE)
         if rc:
             return (int(rc.group(1)), int(rc.group(2)))
@@ -90,47 +72,18 @@ def _parse_start(pos):
     return (0, 0)
 
 
-# --- Spike-weighted shortest path (state-augmented Dijkstra) ---
-# CONFIRMED game mechanic (F7 probe: 3 physical contacts -> exactly 1 damage
-# event): a spike tile is a ONE-TIME TOLL. The FIRST time the avatar enters a
-# given spike tile it costs 1 life; every SUBSEQUENT entry of that SAME tile is
-# FREE. So spike cost is path-dependent: it depends on which spikes have already
-# been triggered earlier on the route.
-#
-# We model this by augmenting the search state with the set of spikes already
-# triggered. Entering a spike:
-#   - already in `triggered`  -> step cost 1 (free highway, re-crossing)
-#   - not yet triggered       -> step cost SPIKE_COST (pay the toll once)
-# `already_triggered` seeds spikes paid for in PRIOR planner segments so later
-# trips reuse them for free. The number of DISTINCT NEW tolls paid on a route is
-# cost // SPIKE_COST (path length always << SPIKE_COST on a real board).
-SPIKE_COST = 100000
-
 def _dijkstra(game_map, rows, cols, start, goal, blocked, open_cells,
               already_triggered=None):
-    """
-    blocked: set of cells treated as walls (e.g. locked doors).
-    open_cells: set of cells force-walkable (e.g. an unlocked door, or start-trapped spikes).
-    already_triggered: set of spike (r,c) already paid for in earlier segments;
-        entering these is FREE.
-    Returns (path_moves, new_spikes_triggered_set) or (None, None).
-    The second value is the SET of spike tiles this route triggers for the FIRST
-    time (empty set if none). len(...) is the life cost of taking this route.
-    """
     if already_triggered is None:
         already_triggered = frozenset()
     else:
         already_triggered = frozenset(already_triggered)
-
-    start_state = (start[0], start[1], already_triggered)
-    dist = {start_state: 0}
-    # heap entries: (cost, r, c, triggered_frozenset, path)
+    dist = {(start[0], start[1], already_triggered): 0}
     pq = [(0, start[0], start[1], already_triggered, [])]
     while pq:
         cost, r, c, triggered, path = heapq.heappop(pq)
         if (r, c) == goal:
-            new_spikes = set(triggered) - set(already_triggered)
-            return path, new_spikes
+            return path, set(triggered) - set(already_triggered)
         if cost > dist.get((r, c, triggered), float('inf')):
             continue
         for dr, dc, move in DIRECTIONS:
@@ -144,14 +97,14 @@ def _dijkstra(game_map, rows, cols, start, goal, blocked, open_cells,
             if not forced_open:
                 if cell in NONWALK_BASE:
                     continue
-                if _is_door(cell):   # locked door acts as wall unless in open_cells/goal
+                if _is_door(cell):
                     continue
             ntrig = triggered
             if cell in SPIKE_TILES and (nr, nc) not in triggered:
-                step = SPIKE_COST                       # first entry: pay the toll
+                step = SPIKE_COST
                 ntrig = triggered | frozenset({(nr, nc)})
             else:
-                step = 1                                # normal step OR free re-cross
+                step = 1
             ncost = cost + step
             nstate = (nr, nc, ntrig)
             if ncost < dist.get(nstate, float('inf')):
@@ -161,7 +114,6 @@ def _dijkstra(game_map, rows, cols, start, goal, blocked, open_cells,
 
 
 def _find_start_exit(game_map, rows, cols, start_pos):
-    """If the avatar is walled in with only spikes adjacent, allow stepping onto them."""
     r, c = start_pos
     allow = set()
     has_free = False
@@ -188,10 +140,9 @@ def _pathfind(game_map, start_pos, life_value=250):
     full_path = []
     open_cells = _find_start_exit(game_map, rows, cols, start_pos)
 
-    # locate special tiles
     treasure = None
-    keys = {}      # cell_code -> (r,c)
-    doors = {}     # cell_code -> (r,c)
+    keys = {}
+    doors = {}
     for row in range(rows):
         for col in range(cols):
             cell = board[row][col]
@@ -205,76 +156,25 @@ def _pathfind(game_map, start_pos, life_value=250):
         return []
 
     locked_doors = set(doors.values())
-    keys_held = set()          # door codes we can open (matched key collected)
+    keys_held = set()
     key_pos_by_code = dict(keys)
     door_pos_by_code = dict(doors)
-
-    # Persistent set of spike tiles already triggered (paid for) so far on the
-    # actual route. Seeds every _dijkstra call: re-crossing a paid spike is free.
     triggered_spikes = set()
 
     def value_of(cell):
         if cell in COIN_TILES:
             return 250
         if _is_challenge(cell):
-            return 400  # conservative; challenges always worth >= a life -> always take
+            return 400
         return 0
 
     def commit(path, new_spikes, dest):
-        """Apply a chosen route: record it, advance position, mark spikes paid."""
         nonlocal r, c
         full_path.extend(path)
         r, c = dest
         triggered_spikes.update(new_spikes)
 
-    def pocket_value(new_spikes):
-        """Total reward reachable ONCE we pay for `new_spikes` (i.e. treating those
-        spikes as free-crossable highways from now on). This is the PCOP pocket
-        insight: a spike gates a POCKET, so crossing it once unlocks EVERYTHING
-        beyond it, not just the single next tile. Sum coins+challenges reachable
-        with the new spikes considered already-triggered."""
-        if not new_spikes:
-            return 0
-        seed = set(triggered_spikes) | set(new_spikes)
-        total = 0
-        for rr in range(rows):
-            for cc in range(cols):
-                cell = board[rr][cc]
-                if not (cell in COIN_TILES or _is_challenge(cell)):
-                    continue
-                p, ns = _dijkstra(board, rows, cols, (r, c), (rr, cc),
-                                  blocked=locked_doors, open_cells=open_cells,
-                                  already_triggered=seed)
-                # reachable using ONLY the spikes we're about to pay for (no extra new ones)
-                if p is not None and not (set(ns) - set(new_spikes)):
-                    total += value_of(cell)
-        return total
-
-    def worth_crossing(new_spikes):
-        """Cross the new spikes iff total reward they unlock STRICTLY exceeds their
-        life cost. 1 spike = 1 life = life_value (250) lost lifeBonus. On a tie
-        (reward == life cost), prefer KEEPING the life: it preserves margin against
-        other forced spikes / wrong answers later, at zero score cost."""
-        if not new_spikes:
-            return True
-        return pocket_value(new_spikes) > len(new_spikes) * life_value
-
-    def go_to(goal, force_take=False):
-        """Move to goal via fewest-NEW-spike path (locked doors block).
-        Only NEW (un-paid) spikes count toward life cost; already-paid spikes are
-        free highways. Cross new spikes iff the POCKET they unlock is worth it."""
-        path, new_spikes = _dijkstra(board, rows, cols, (r, c), goal,
-                                     blocked=locked_doors - {goal}, open_cells=open_cells,
-                                     already_triggered=triggered_spikes)
-        if path is None:
-            return False
-        if new_spikes and not force_take and not worth_crossing(new_spikes):
-            return False
-        commit(path, new_spikes, goal)
-        return True
-
     def sweep():
-        """Collect all currently-reachable coins/challenges, fewest-NEW-spikes then nearest."""
         for _ in range(400):
             best = None
             for row in range(rows):
@@ -289,9 +189,7 @@ def _pathfind(game_map, start_pos, life_value=250):
                                                  already_triggered=triggered_spikes)
                     if path is None:
                         continue
-                    # Pocket-value: cross new spikes only if the whole pocket they
-                    # unlock is worth the life cost (not just this single tile).
-                    if new_spikes and not worth_crossing(new_spikes):
+                    if new_spikes and value_of(cell) < len(new_spikes) * life_value:
                         continue
                     key = (len(new_spikes), len(path))
                     if best is None or key < best[0]:
@@ -303,13 +201,12 @@ def _pathfind(game_map, start_pos, life_value=250):
             board[tgt[0]][tgt[1]] = 'normal'
 
     def collect_keys():
-        """Pick up every currently-reachable key (keys gate +1000 doors -> force)."""
         progressed = True
         while progressed:
             progressed = False
             for kcode, kpos in list(key_pos_by_code.items()):
                 if board[kpos[0]][kpos[1]] == 'normal':
-                    continue  # already taken
+                    continue
                 path, new_spikes = _dijkstra(board, rows, cols, (r, c), kpos,
                                              blocked=locked_doors, open_cells=open_cells,
                                              already_triggered=triggered_spikes)
@@ -321,7 +218,6 @@ def _pathfind(game_map, start_pos, life_value=250):
                 progressed = True
 
     def open_doors():
-        """Walk onto any door whose key we hold (unlocks + passes through). Force-take."""
         progressed = False
         for dcode in list(keys_held):
             dpos = door_pos_by_code.get(dcode)
@@ -338,36 +234,28 @@ def _pathfind(game_map, start_pos, life_value=250):
             progressed = True
         return progressed
 
-    # Topology-driven loop: sweep, grab reachable keys, open reachable doors, repeat
-    # until nothing new opens. Handles nested pockets (green door -> red door).
     for _ in range(20):
         sweep()
         collect_keys()
         opened = open_doors()
-        # after opening, keys inside the new pocket may now be reachable
         collect_keys()
         if not opened and not any(board[kp[0]][kp[1]] != 'normal' for kp in key_pos_by_code.values()):
-            # nothing left to open and all keys collected -> final sweep then done
             sweep()
             if not any(dp in locked_doors for dp in door_pos_by_code.values()):
                 break
 
-    # 4) go to treasure (must-take; already-paid spikes are free highways)
     path, _new = _dijkstra(board, rows, cols, (r, c), treasure,
                            blocked=set(), open_cells=open_cells,
                            already_triggered=triggered_spikes)
     if path is not None:
         full_path.extend(path)
         return full_path
-
-    # fallback: shouldn't happen, but never forfeit the treasure
     path, _ = _dijkstra(board, rows, cols, start_pos, treasure,
                         blocked=set(), open_cells=open_cells)
     return path or full_path
 
 
 def _replay_end(game_map, rows, cols, start, path):
-    """Replay path (stopping at walls/edges) and return the final valid position."""
     mv = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
     r, c = start
     for m in path:
@@ -381,9 +269,6 @@ def _replay_end(game_map, rows, cols, start, path):
 
 
 def _ensure_treasure(game_map, rows, cols, start, path):
-    """Guarantee the returned path ends on the treasure when it is reachable
-    at all. Doors and spikes are treated as passable for this safety route so
-    the avatar is never stranded and the +1000 treasure is never forfeited."""
     treasure = None
     for r in range(rows):
         for c in range(cols):
@@ -393,28 +278,21 @@ def _ensure_treasure(game_map, rows, cols, start, path):
         if treasure:
             break
     if treasure is None:
-        return path  # no treasure on this map; nothing to guarantee
-
+        return path
     end = _replay_end(game_map, rows, cols, start, path)
     if end == treasure:
         return path
-
-    # Append a route from wherever the plan left us to the treasure.
-    # Doors passable (open_cells = all doors), spikes crossable.
     all_doors = {(r, c) for r in range(rows) for c in range(cols) if _is_door(game_map[r][c])}
     tail, _ = _dijkstra(game_map, rows, cols, end, treasure,
                         blocked=set(), open_cells=all_doors)
     if tail:
         return list(path) + tail
-    # Last resort: fresh route straight from start.
     direct, _ = _dijkstra(game_map, rows, cols, start, treasure,
                          blocked=set(), open_cells=all_doors)
     return direct if direct is not None else path
 
 
 def _normalize_map(game_map):
-    """Coerce to a rectangular grid of strings. Pads short rows, replaces
-    non-string / empty cells with 'normal'. Never raises."""
     if not isinstance(game_map, list) or not game_map:
         return []
     rows = []
@@ -431,51 +309,94 @@ def _normalize_map(game_map):
     return [r + ['normal'] * (max_cols - len(r)) for r in rows]
 
 
-def lambda_handler(event, context):
-    params = _extract_params(event)
-    game_map = (params.get('game_map') or params.get('map') or
-                params.get('maze') or params.get('grid') or [])
-    if isinstance(game_map, str):
+def _extract_body(event):
+    """Accept AgentCore Gateway shapes AND the organizer's body/direct shape."""
+    if isinstance(event, dict) and 'parameters' in event and isinstance(event['parameters'], list):
+        params = {}
+        for p in event['parameters']:
+            name = p.get('name', '')
+            value = p.get('value', '')
+            try:
+                params[name] = json.loads(value) if isinstance(value, str) else value
+            except (json.JSONDecodeError, TypeError):
+                params[name] = value
+        return params
+    if isinstance(event, dict) and 'body' in event:
+        body = event['body']
         try:
-            game_map = json.loads(game_map)
+            return json.loads(body) if isinstance(body, str) else body
         except (json.JSONDecodeError, TypeError):
-            game_map = []
-    game_map = _normalize_map(game_map)
-    action = params.get('action', 'count')
-    tile = params.get('tile', '')
-    if not game_map:
-        return {"result": "0", "success": False, "error": "No map provided"}
+            return {}
+    return event if isinstance(event, dict) else {}
 
-    if action == 'count':
-        count = sum(1 for row in game_map for cell in row if cell == tile)
-        return {"result": str(count), "success": True}
-    elif action == 'find':
-        pos = [[r, c] for r in range(len(game_map)) for c in range(len(game_map[r])) if game_map[r][c] == tile]
-        return {"result": json.dumps(pos), "success": True, "count": len(pos)}
-    elif action == 'pathfind':
-        raw_start = (params.get('start_pos') or params.get('start') or
-                     params.get('position') or params.get('playerStart') or [0, 0])
-        if isinstance(raw_start, dict):
-            start_pos = (raw_start.get('row', 0), raw_start.get('col', 0))
-        else:
-            start_pos = _parse_start(raw_start)
+
+def lambda_handler(event, context):
+    """
+    Pathfinding tool (merged with mapanalyzer engine).
+
+    Path mode (default): returns {'path':[...], 'steps':N, 'start_position':[r,c]}
+      - spike one-time-toll optimal, key/door aware, treasure guaranteed.
+    Analysis mode (action=find|count, tile=cX): returns {'result':..., 'count':N}
+      - used by the c3 "How many <tile> on the map" challenge.
+    """
+    try:
+        body = _extract_body(event)
+
+        game_map = (body.get('game_map') or body.get('map') or
+                    body.get('maze') or body.get('grid') or [])
+        if isinstance(game_map, str):
+            try:
+                game_map = json.loads(game_map)
+            except (json.JSONDecodeError, TypeError):
+                game_map = []
+        game_map = _normalize_map(game_map)
+        if not game_map:
+            return {'statusCode': 400, 'body': json.dumps({'error': 'Missing game_map'})}
+
         rows, cols = len(game_map), len(game_map[0])
+        action = str(body.get('action', '') or '').lower().strip()
+        tile = body.get('tile', '')
+
+        # --- Analysis mode (c3): count / find a tile ---
+        # Return the FULLY-FORMATTED "Scanning the map" answer so the model just
+        # echoes it verbatim (no formatting step -> no bare-number failure).
+        if action in ('count', 'find') or (tile and not body.get('strategy')):
+            positions = [(r, c) for r in range(rows) for c in range(cols)
+                         if game_map[r][c] == tile]
+            lines = ["Scanning the map:"]
+            for (r, c) in positions:
+                lines.append(f"- Row {r}, Col {c}: {tile}")
+            lines.append(str(len(positions)))
+            formatted = "\n".join(lines)
+            return {'statusCode': 200,
+                    'body': json.dumps({'result': formatted,
+                                        'answer': formatted,
+                                        'count': len(positions),
+                                        'positions': [[r, c] for (r, c) in positions]})}
+
+        # --- Path mode (default) ---
+        map_config = body.get('map_config', {})
+        player_start = map_config.get('playerStart') or body.get('playerStart') or {}
+        if isinstance(player_start, str):
+            start_pos = _parse_start(player_start)
+        elif isinstance(player_start, dict) and player_start:
+            start_pos = (player_start.get('row', 0), player_start.get('col', 0))
+        else:
+            raw = (body.get('start_pos') or body.get('start') or
+                   body.get('position') or [0, 0])
+            start_pos = _parse_start(raw)
         if not (0 <= start_pos[0] < rows and 0 <= start_pos[1] < cols):
             start_pos = (0, 0)
 
-        # Primary planner, fully guarded: any error falls back to a safe route.
         try:
             path = _pathfind(game_map, start_pos)
         except Exception as e:
             print(f"PATHFIND ERROR (falling back): {type(e).__name__}: {e}")
             path = []
 
-        # Guaranteed treasure fallback: if the plan does not end on the treasure,
-        # append/return a spike-and-door-allowed route to the treasure so we never
-        # strand the avatar or forfeit the +1000 (only skipped if truly unreachable).
         path = _ensure_treasure(game_map, rows, cols, start_pos, path)
 
-        # Validation: never emit a move that walks into a wall or off-grid.
+        # wall-safe validation
         validated = []
         cr, cc = start_pos
         mv = {"up": (-1, 0), "down": (1, 0), "left": (0, -1), "right": (0, 1)}
@@ -487,6 +408,11 @@ def lambda_handler(event, context):
                 cr, cc = nr, nc
             else:
                 break
-        return {"result": json.dumps(validated), "success": True, "steps": len(validated)}
-    else:
-        return {"result": "0", "success": False, "error": f"Unknown action: {action}"}
+
+        result = {'path': validated, 'steps': len(validated),
+                  'start_position': list(start_pos)}
+        return {'statusCode': 200, 'body': json.dumps(result)}
+
+    except Exception as e:
+        print(f"ERROR: {e}")
+        return {'statusCode': 500, 'body': json.dumps({'error': str(e)})}
