@@ -251,11 +251,13 @@ def _pathfind(game_map, start_pos, life_value=250):
         return total
 
     def worth_crossing(new_spikes):
-        """Cross the new spikes iff total reward they unlock exceeds their life cost.
-        1 spike = 1 life = life_value (250) lost lifeBonus."""
+        """Cross the new spikes iff total reward they unlock STRICTLY exceeds their
+        life cost. 1 spike = 1 life = life_value (250) lost lifeBonus. On a tie
+        (reward == life cost), prefer KEEPING the life: it preserves margin against
+        other forced spikes / wrong answers later, at zero score cost."""
         if not new_spikes:
             return True
-        return pocket_value(new_spikes) >= len(new_spikes) * life_value
+        return pocket_value(new_spikes) > len(new_spikes) * life_value
 
     def go_to(goal, force_take=False):
         """Move to goal via fewest-NEW-spike path (locked doors block).
