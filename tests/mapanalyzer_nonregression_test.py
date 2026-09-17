@@ -1,4 +1,9 @@
 import json
+import os
+import sys
+
+# Make the deployed Lambda importable regardless of where the test is run from.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas"))
 from mapanalyzer_lambda import lambda_handler, _is_challenge, _is_key, _is_door, _door_for_key
 
 MAP = [["normal","normal","c7","c7","c7","c5","c7","c7","c1","treasure"],
